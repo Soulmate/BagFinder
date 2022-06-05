@@ -1,0 +1,671 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Text;
+using System.Windows.Forms;
+using System.IO;
+
+namespace test2
+{
+    public partial class Form1 : Form
+    {
+        //interface Marker
+        //{
+        //    public void Plot();
+        //    public FindMarkerByPos();
+        //}
+
+
+        class BagMarker
+        {
+            public PointF[] markers = new PointF[5];
+            // 0 1 точки начала бэга
+            // 2 3 точки конца бэга, 4 точка разрыва
+            public int? f1, f2; //кадры начала и конца бэга
+
+            public BagMarker()
+            {
+                //for (int i = 1; i < 5; i++)
+                //    markers[i] = new PointF();                    
+                f1 = f2 = null;
+            }
+            public int FindMarkerByPos(PointF p)
+            {
+                return Array.FindIndex(markers, x => PointsAreClose(x, p));
+            }
+            public bool MarkerIsAtTime(double frame)
+            {
+                if (f1 == null && f2 == null)
+                    return false;
+                if (f1 <= f2)
+                    return (frame >= f1 && frame <= f2);
+                else
+                    return (frame >= f2 && frame <= f1);
+            }
+            static bool PointsAreClose(PointF p1, PointF p2)
+            {
+                double minDist = 10;
+                return (Math.Abs(p1.X - p2.X) < minDist && Math.Abs(p1.Y - p2.Y) < minDist);
+            }
+        }
+
+
+        List<BagMarker> markersList = new List<BagMarker>();
+        void SaveMarkersList()
+        {
+            if (markersList.Count > 0)
+            {
+                using (StreamWriter sw = File.CreateText(folderBrowserDialog1.SelectedPath + ".dat"))
+                {
+                    sw.Write("frame1\tframe2\t");
+                    for (int i = 0; i < markersList[0].markers.Length; i++)
+                        sw.Write("marker{0} x\tmarker{0} y\t", i);                    
+                    foreach (var m in markersList)
+                    {
+                        sw.WriteLine();
+                        sw.Write("{0}\t{1}\t", m.f1, m.f2);
+                        for (int i = 0; i < m.markers.Length; i++)
+                            sw.Write("{0}\t{1}\t", m.markers[i].X, m.markers[i].Y);                        
+                    }                    
+                }
+            }
+        }
+        void LoadMarkersList()
+        {
+            if (File.Exists(folderBrowserDialog1.SelectedPath + ".dat"))
+            {
+                markersList.Clear();
+                using (StreamReader sr = File.OpenText(folderBrowserDialog1.SelectedPath + ".dat"))
+                {
+                    string headers = sr.ReadLine();
+                    char sep = '\t';
+                    string[] headers_split = headers.Split(sep);
+                    int numOfMarkers = (headers_split.Length - 3) / 2; //число точечных маркеров в каждой маркере бэга
+
+                    while (sr.Peek() >= 0)
+                    {
+                        string s = sr.ReadLine();
+                        string[] ss = s.Split(sep);
+                        if (ss.Length - 1 == 2 + numOfMarkers * 2)
+                        {
+                            BagMarker bm = new BagMarker();
+                            bm.f1 = int.Parse(ss[0]);
+                            bm.f2 = int.Parse(ss[1]);
+                            for (int i = 0; i < numOfMarkers; i++)
+                                bm.markers[i] = new PointF(float.Parse(ss[2 + i * 2]), float.Parse(ss[3 + i * 2]));
+                            markersList.Add(bm);
+                        }
+                    }
+                    pictureBox1.Invalidate();
+                    pictureBox2.Invalidate();
+                }
+            }
+        }
+
+
+        ImageLoader il;
+        public Form1()
+        {
+            InitializeComponent();
+
+            pictureBox1.MouseWheel += pictureBox1_MouseWheel;
+            
+            folderBrowserDialog1.SelectedPath = @"E:\data 2014 - 2015\2014 Bags (не полный)\2014 08\Shadow vertical\NAC records\F40 10000 7";
+            OpenFolder();                          
+        }
+
+        private void bagMarkerToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            OpenFolder();
+        }
+        void OpenFolder()
+        {
+            while (folderBrowserDialog1.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                MessageBox.Show("Select a folder");
+
+            markersList.Clear();
+            selectedBagMarker = -1;
+            selectedBagMarkerPoint = -1;
+            creatingBubbleStep = -1;
+
+            il = new ImageLoader(folderBrowserDialog1.SelectedPath);
+            //trackbar            
+            tlo = 0;
+            int tl_displaySize = pictureBox2.Size.Width;
+            hScrollBar1.Maximum = (int)(il.count - tl_displaySize * tlm);
+
+            //image
+            icm = 1;
+            ico = new Point(0, 0);
+            icr = false;
+            rotateToolStripMenuItem.Checked = false;
+
+            LoadMarkersList();
+
+            numericUpDownN.Minimum = 0;
+            numericUpDownN.Maximum = il.count-1;
+            numericUpDownN.Value = 0;
+
+            pictureBox1.Invalidate();
+            pictureBox2.Invalidate();
+
+            this.Text = folderBrowserDialog1.SelectedPath;            
+        }
+        
+
+
+        Point ico; // image origin position
+        double icm; //magnify image ratio
+        bool icr; //rotate 90 degrees
+        private void pictureBox1_Paint(object sender, PaintEventArgs e)
+        {            
+            //numericUpDownN.Value = il.imNum;
+
+            Pen RedPen = new Pen(Color.Blue, 2);
+            Pen RedPenD = new Pen(Color.Blue, 2);
+            RedPenD.DashPattern = new float[] { 2, 2 };
+
+            Bitmap b = il.getImage();
+            if (b != null)
+            {
+                Graphics g = e.Graphics;
+                Rectangle r;
+                r = new Rectangle(ico.X, ico.Y, (int)Math.Round(b.Width * icm), (int)Math.Round(b.Height * icm));
+                g.DrawImage(b, r);
+
+                if (creatingBubbleStep == 1)
+                    g.DrawRectangle(Pens.Red, mPoint.X - 5, mPoint.Y - 5, 10, 10);
+                if (creatingBubbleStep == 2)
+                    g.DrawRectangle(Pens.Cyan, mPoint.X - 5, mPoint.Y - 5, 10, 10);
+
+                foreach (BagMarker m in markersList)
+                    if (m.MarkerIsAtTime(il.imNum))
+                    {
+                        PointF p11WC = IC2WCF(m.markers[0]);
+                        PointF p12WC = IC2WCF(m.markers[1]);
+                        PointF p21WC = IC2WCF(m.markers[2]);
+                        PointF p22WC = IC2WCF(m.markers[3]);
+                        PointF p23WC = IC2WCF(m.markers[4]);
+                        if (m.f1 == il.imNum)
+                            RedPenD.Brush = Brushes.Red;
+                        else
+                            RedPenD.Brush = Brushes.Blue;
+
+                        if (m.f2 == il.imNum)
+                            RedPen.Brush = Brushes.Red;
+                        else
+                            RedPen.Brush = Brushes.Blue;
+
+                        if (!p11WC.IsEmpty)
+                            g.DrawRectangle(Pens.Blue, p11WC.X - 3, p11WC.Y - 3, 6, 6);
+                        if (!p12WC.IsEmpty)
+                            g.DrawRectangle(Pens.Blue, p12WC.X - 3, p12WC.Y - 3, 6, 6);
+                        if (!p21WC.IsEmpty)
+                            g.DrawRectangle(Pens.Blue, p21WC.X - 3, p21WC.Y - 3, 6, 6);
+                        if (!p22WC.IsEmpty)
+                            g.DrawRectangle(Pens.Blue, p22WC.X - 3, p22WC.Y - 3, 6, 6);
+                        if (!p23WC.IsEmpty)
+                            g.DrawRectangle(Pens.Blue, p23WC.X - 3, p23WC.Y - 3, 6, 6);
+
+                        if (il.imNum >= m.f1 && il.imNum <= m.f2 || il.imNum == m.f1)
+                        {
+                            if (!p11WC.IsEmpty && !p12WC.IsEmpty)
+                                g.DrawLine(RedPenD, p11WC, p12WC);
+                            if (!p21WC.IsEmpty && !p22WC.IsEmpty)
+                                g.DrawLine(RedPen, p21WC, p22WC);
+                            if (!p23WC.IsEmpty)
+                            {
+                                g.DrawLine(Pens.Blue, p23WC.X, p23WC.Y - 3, p23WC.X, p23WC.Y + 3);
+                                g.DrawLine(Pens.Blue, p23WC.X - 3, p23WC.Y, p23WC.X + 3, p23WC.Y);
+                            }
+                        }
+
+                        if (!p11WC.IsEmpty && !p12WC.IsEmpty && !p21WC.IsEmpty && !p22WC.IsEmpty && !p23WC.IsEmpty)
+                        {
+                            g.DrawLine(Pens.Blue, p11WC, p21WC);
+                            g.DrawLine(Pens.Blue, p12WC, p22WC);
+                            double part = (il.imNum - m.f1.Value)/(double)(m.f2.Value - m.f1.Value);
+                            if (part >= 0 && part <= 1)
+                            {
+                                int x, y;
+                                x = (int)(p11WC.X + (p21WC.X - p11WC.X) * part);
+                                y = (int)(p11WC.Y + (p21WC.Y - p11WC.Y) * part);
+                                g.DrawEllipse(Pens.Red, x - 3, y - 3, 6, 6);
+                                x = (int)(p12WC.X + (p22WC.X - p12WC.X) * part);
+                                y = (int)(p12WC.Y + (p22WC.Y - p12WC.Y) * part);
+                                g.DrawEllipse(Pens.Red, x - 3, y - 3, 6, 6);
+                            }
+                        }
+                    }
+            }
+        }
+        PointF IC2WCF(PointF p)  //из координатной систмы картинки в координатную систему пикчабокса
+        {
+            if (p.IsEmpty)
+                return new Point();
+            if (icr)
+            {
+                float tempx = p.X;
+                p.X = p.Y;
+                p.Y = -tempx + il.imSize.Width;
+            }
+            float x = (p.X * (float)icm + ico.X);
+            float y = (p.Y * (float)icm + ico.Y);
+            return new PointF(x, y);
+        }
+        Point WC2IC(Point p)
+        {
+            if (p.IsEmpty)
+                return new Point();
+            int x = (int)((p.X - ico.X) / icm);
+            int y = (int)((p.Y - ico.Y) / icm);
+            if (icr)
+            {
+                int tempx = x;
+                x = -y + il.imSize.Width;
+                y = tempx;
+            }
+            return new Point(x, y); ;
+        }               
+
+        Point mPoint = new Point();
+        int selectedBagMarker = -1;
+        int selectedBagMarkerPoint = -1;
+        int creatingBubbleStep = -1;
+        //System.Windows.Forms.MouseButtons mButton = System.Windows.Forms.MouseButtons.None;
+        private void pictureBox1_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                if (creatingBubbleStep == 1)
+                {
+                    markersList[selectedBagMarker].markers[2] = WC2IC(e.Location);
+                    selectedBagMarkerPoint = 3;
+                    markersList[selectedBagMarker].f2 = il.imNum;
+                    creatingBubbleStep = 2;
+                }
+                else if (creatingBubbleStep == 2)
+                {
+                    markersList[selectedBagMarker].markers[4] = WC2IC(e.Location);
+                    selectedBagMarkerPoint = 4;
+                    creatingBubbleStep = -1;
+                }
+                else
+                {
+                    List<BagMarker> markersNearFrameList = markersList.FindAll(x => x.MarkerIsAtTime(il.imNum));
+                    int index = markersNearFrameList.FindIndex(x => x.FindMarkerByPos(WC2IC(e.Location)) != -1);
+                    if (index != -1)
+                    {
+                        selectedBagMarker = markersList.IndexOf(markersNearFrameList[index]);
+                        selectedBagMarkerPoint = markersList[selectedBagMarker].FindMarkerByPos(WC2IC(e.Location));
+                    }
+                    else
+                    {
+                        BagMarker bm = new BagMarker();
+                        bm.markers[0] = WC2IC(e.Location);
+                        markersList.Add(bm);
+                        selectedBagMarker = markersList.Count - 1;
+                        selectedBagMarkerPoint = 1;
+                        markersList[selectedBagMarker].f1 = il.imNum;
+                        markersList[selectedBagMarker].f2 = il.count;
+                        creatingBubbleStep = 1;
+                    }
+                }
+
+                if (Control.ModifierKeys == Keys.Control)
+                {
+
+                }
+
+
+                pictureBox1.Invalidate();
+            }
+
+            if (e.Button == System.Windows.Forms.MouseButtons.Right)
+            {
+                List<BagMarker> markersNearFrameList = markersList.FindAll(x => x.MarkerIsAtTime(il.imNum));
+                int index = markersNearFrameList.FindIndex(x => x.FindMarkerByPos(WC2IC(e.Location)) != -1);
+                if (index != -1)
+                {
+                    markersList.Remove(markersNearFrameList[index]);
+                    creatingBubbleStep = -1;
+                }
+            }
+
+            pictureBox1.MouseMove += pictureBox1_MouseMove;
+            mPoint = e.Location;
+            //mButton = e.Button;
+        }
+
+        void pictureBox1_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {                
+                if (selectedBagMarker != -1 && selectedBagMarkerPoint != -1)
+                    markersList[selectedBagMarker].markers[selectedBagMarkerPoint] = WC2IC(e.Location);
+                pictureBox1.Invalidate();
+            }
+
+            if (e.Button == System.Windows.Forms.MouseButtons.Middle)
+            {
+                if (mPoint.IsEmpty)
+                    return;
+                Size mDispl = Size.Subtract((Size)e.Location, (Size)mPoint);
+
+                int new_ico_X = ico.X + e.X - mPoint.X;
+                int new_ico_Y = ico.Y + e.Y - mPoint.Y;
+
+                //Console.WriteLine("Scroll new_ico_X {0} new_ico_Y {1}", new_ico_X, new_ico_X);
+                //if (pictureBox1.Width < b.Width * icm)
+                //{
+                //    new_ico_X = Math.Min(0, new_ico_X);
+                //    new_ico_X = Math.Max((int)(pictureBox1.Width - b.Width * icm), new_ico_X);
+                //}
+                //else
+                //{
+                //    new_ico_X = Math.Max(0, new_ico_X);
+                //    new_ico_X = Math.Min((int)(pictureBox1.Width - b.Width * icm), new_ico_X);
+                //}
+                //if (pictureBox1.Height < b.Height * icm)
+                //{
+                //    new_ico_Y = Math.Min(0, new_ico_Y);
+                //    new_ico_Y = Math.Max((int)(pictureBox1.Height - b.Height * icm), new_ico_Y);
+                //}
+                //else
+                //{
+                //    new_ico_Y = Math.Max(0, new_ico_Y);
+                //    new_ico_Y = Math.Min((int)(pictureBox1.Height - b.Height * icm), new_ico_Y);
+                //}
+
+
+                ico.X = new_ico_X;
+                ico.Y = new_ico_Y;                
+            }
+            pictureBox1.Invalidate();
+            mPoint = e.Location;
+        }
+
+        private void pictureBox1_MouseUp(object sender, MouseEventArgs e)
+        {
+            //pictureBox1.MouseMove -= pictureBox1_MouseMove;
+            if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                if (selectedBagMarker != -1)
+                {
+                    if (selectedBagMarkerPoint == 0 || selectedBagMarkerPoint == 1)
+                        //if (il.imNum > markersList[selectedBagMarker].f2)
+                        //    markersList.RemoveAt(selectedBagMarker);
+                        //else
+                            markersList[selectedBagMarker].f1 = il.imNum;
+                    if (selectedBagMarkerPoint == 2 || selectedBagMarkerPoint == 3 || selectedBagMarkerPoint == 4)
+                        //if (il.imNum < markersList[selectedBagMarker].f1)
+                        //    markersList.RemoveAt(selectedBagMarker);
+                        //else
+                            markersList[selectedBagMarker].f2 = il.imNum;
+                }
+            }
+            pictureBox1.Invalidate();
+        }
+
+
+        private void pictureBox1_MouseHover(object sender, EventArgs e)
+        {
+            pictureBox1.Focus();
+            //Console.WriteLine("Focus");
+        }
+        void pictureBox1_MouseWheel(object sender, MouseEventArgs e)
+        {
+            if (Control.ModifierKeys == Keys.Control)
+            {
+                int d = e.Delta;
+                double scale = 1 + d / 500.0;
+
+                int mousePosInIC_unscaled_x = e.X - ico.X;
+                int mousePosInIC_unscaled_y = e.Y - ico.Y;
+
+
+                int new_ico_X = e.X - (int)(mousePosInIC_unscaled_x * scale);
+                int new_ico_Y = e.Y - (int)(mousePosInIC_unscaled_y * scale);
+
+
+                ico.X = new_ico_X;
+                ico.Y = new_ico_Y;
+
+                icm = icm * scale;
+
+                pictureBox1.Invalidate();
+
+                //Console.WriteLine("Wheel d{0} scale{1} icm{2} mx{3} ico.X{4}", d, scale, icm, mousePosInIC_unscaled_x, ico.X);
+            }
+            else
+            {
+                int d = e.Delta;
+                if (d < 0)
+                    il.imNum++;
+                else
+                    il.imNum--;
+                numericUpDownN.Value = il.imNum;
+                pictureBox1.Invalidate();
+                pictureBox2.Invalidate();
+            }
+        }
+
+        private void pictureBox1_MouseLeave(object sender, EventArgs e)
+        {
+            //Console.WriteLine("Lost focus");
+            this.Focus();
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            icm = 1;
+            ico.X = ico.Y = 0;
+            pictureBox1.Invalidate();
+        }
+
+        private void rotateToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            icr = rotateToolStripMenuItem.Checked;
+            il.rotate = icr;
+            pictureBox1.Invalidate();
+        }
+
+        
+        double tlm=1; //масштаб таймлайна (кадров/пиксель)
+        double tlo; //начало координат таймлайна (кадров)
+        private void pictureBox2_Paint(object sender, PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+
+            float maxP = (float)TLC2PBC(il.count);
+            g.FillRectangle(Brushes.Gray, maxP, 0, 2000, 2000);
+
+            int tl_displaySize = pictureBox2.Size.Width;
+            int leftFrame = (int)tlo;
+            int rightFrame = (int)(tlo + tl_displaySize*tlm);
+            int frameStep10Pow = (int)(Math.Floor(Math.Log10((rightFrame-leftFrame)/30.0))+1);
+            double frameStep = Math.Pow(10,frameStep10Pow);  
+            double leftFrameFrac = Math.Floor(leftFrame/frameStep) * frameStep;  
+            double rightFrameFrac = (Math.Floor(rightFrame/frameStep)+1) * frameStep;
+
+            float framePos = (float)TLC2PBC(il.imNum);
+            g.DrawLine(Pens.Red, framePos, 20, framePos, 70);
+
+            
+            for (double frameTick = leftFrameFrac; frameTick <= rightFrameFrac; frameTick += frameStep)
+            {
+                Console.WriteLine("{0}", frameTick);
+                float p = (float)TLC2PBC(frameTick);
+                g.DrawLine(Pens.Black, p, 0, p, 5);
+                StringFormat sf = new StringFormat();
+                sf.Alignment = StringAlignment.Center;
+                g.DrawString(frameTick.ToString(), new Font("Arial", 8), Brushes.Black, p, 5,sf);
+            }
+
+            foreach (var m in markersList)
+            {
+                if (m.f1.HasValue)
+                {
+                    float p = (float)TLC2PBC(m.f1.Value);
+                    g.DrawLine(Pens.BlueViolet, p, 15, p, 19);
+                }
+                if (m.f2.HasValue)
+                {
+                    float p = (float)TLC2PBC(m.f2.Value);
+                    g.DrawLine(Pens.Blue, p, 15, p, 19);
+                }
+                if (m.f1.HasValue && m.f2.HasValue)
+                {
+                    float p1 = (float)TLC2PBC(m.f1.Value);
+                    float p2 = (float)TLC2PBC(m.f2.Value);
+                    g.DrawLine(Pens.Blue, p1, 17, p2, 17);
+                }
+            }
+        }
+        double TLC2PBC(double f) //из координатной систмы tl в координатную систему пикчабокса
+        {   
+            return (f-tlo)/tlm;
+        }
+        double PBC2TLC(double p) //из координатной систмы пикчабокса в tl
+        {
+            return p*tlm + tlo;
+        }       
+        private void hScrollBar1_Scroll(object sender, ScrollEventArgs e)
+        {
+            tlo = hScrollBar1.Value;
+            pictureBox2.Invalidate();
+        }
+
+        private void tlSetFrame(double value)
+        {
+            il.imNum = (int)Math.Round(PBC2TLC(value));
+            numericUpDownN.Value = il.imNum;
+            pictureBox1.Invalidate();
+            pictureBox2.Invalidate();
+        }
+        private void pictureBox2_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == System.Windows.Forms.MouseButtons.Left)
+            {
+                tlSetFrame(e.X);
+                pictureBox2.MouseMove += pictureBox2_MouseMove;
+                pictureBox2.MouseUp += pictureBox2_MouseUp;
+            }
+            if (e.Button == System.Windows.Forms.MouseButtons.Right)
+            {
+                if (!playing)
+                    Play();
+                else
+                    Stop();
+            }
+        }
+
+        void pictureBox2_MouseUp(object sender, MouseEventArgs e)
+        {
+            pictureBox2.MouseMove -= pictureBox2_MouseMove;
+        }
+
+        void pictureBox2_MouseMove(object sender, MouseEventArgs e)
+        {
+            tlSetFrame(e.X);
+        }
+
+        private void pictureBox2_DoubleClick(object sender, EventArgs e)
+        {
+            
+        }
+
+        bool playing = false;
+        void Play()
+        {
+            timer1.Enabled = true;
+            playing = true;
+        }
+        void Stop()
+        {
+            timer1.Enabled = false;
+            playing = false;
+        }
+
+        private void timer1_Tick(object sender, EventArgs e)
+        {
+            if (!playBackwardsToolStripMenuItem.Checked)
+            {
+                if (il.imNum < il.count-1)
+                    il.imNum++;
+                else
+                    Stop();
+            }
+            else
+            {
+                if (il.imNum > 0)
+                    il.imNum--;
+                else
+                    Stop();
+            }
+            numericUpDownN.Value = il.imNum;
+            pictureBox1.Invalidate();
+            pictureBox2.Invalidate();
+        }
+
+        private void playStopToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (!playing)
+                Play();
+            else
+                Stop();
+        }
+
+        private void trackBarTimerDelay_Scroll(object sender, EventArgs e)
+        {
+            timer1.Interval = (int)(100/trackBarTimerDelay.Value);
+        }
+
+        private void saveMarkersListToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            SaveMarkersList();
+        }
+
+        private void loadMarkersListToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            if (!File.Exists(folderBrowserDialog1.SelectedPath + ".dat"))
+                MessageBox.Show("Faile does not exist");
+            else
+            LoadMarkersList();
+            MessageBox.Show("Loaded markers: " + markersList.Count.ToString());
+        }
+
+        private void clearMarkersListToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            markersList.Clear();
+            pictureBox1.Invalidate();
+            pictureBox2.Invalidate();
+        }
+
+        private void zoomFitToolStripMenuItem_Click(object sender, EventArgs e)
+        {            
+            ico = new Point(0, 0);
+            icm = Math.Min((double)pictureBox1.Width / il.getImage().Width, (double)pictureBox1.Height / il.getImage().Height);
+            pictureBox1.Invalidate();
+        }
+
+        private void numericUpDownN_ValueChanged(object sender, EventArgs e)
+        {
+            il.imNum = (int)numericUpDownN.Value;            
+            pictureBox1.Invalidate();
+            pictureBox2.Invalidate();
+        }
+
+        private void numericUpDown_tlScale_ValueChanged(object sender, EventArgs e)
+        {
+            tlm = (double)numericUpDown_tlScale.Value / 10;
+            hScrollBar1.Maximum = (int)Math.Max(Math.Round(
+                il.count - pictureBox2.Width * tlm), 
+                0);
+            Console.WriteLine("{0}", hScrollBar1.Maximum);            
+            pictureBox2.Invalidate();
+        }
+    }
+}

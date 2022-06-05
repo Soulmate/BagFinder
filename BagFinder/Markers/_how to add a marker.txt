@@ -1,0 +1,5 @@
+﻿Сделать новый класс маркера по образцу Marker_bag5
+Добавить в Marker.CreateFromString(string s, int version_num) нужный конструктор
+Сделать новый инструмент для создания по образцу Tool_create_bag5
+Добавить его в Toolset
+Добавить отображение во viewer
